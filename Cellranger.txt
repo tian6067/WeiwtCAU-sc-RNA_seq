@@ -1,0 +1,4 @@
+#Default parameters
+cellranger count --id sheep  --fastqs /public/home/wwt/raw_data --sample raw_data --transcriptome sheep --expect-cells=10000 --localmem=200 --nosecondary
+#if the the cell number was lower than expect cell
+cellranger count --id sheep  --fastqs /public/home/wwt/raw_data --sample raw_data --transcriptome sheep --force-cells=10000 --localmem=200 --nosecondary

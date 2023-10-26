@@ -1,0 +1,9 @@
+library(CytoTRACE)
+phe <- sheep$celltype
+phe = as.character(phe)
+names(phe) <- rownames(pbmc3k.final@meta.data)
+mat_3k <- as.matrix(sheep@assays$RNA@counts)
+mat_3k[1:4,1:4]
+results <- CytoTRACE(mat = mat_3k)
+plotCytoTRACE(results, phenotype = phe)
+saveRDS(results,file='CytoTRACE.rds')

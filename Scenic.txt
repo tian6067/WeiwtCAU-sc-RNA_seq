@@ -1,0 +1,34 @@
+merged<- readRDS("sheep.rds")
+library(SCENIC)
+library(doParallel)
+library(doSNOW)
+library(BiocParallel)
+register(MulticoreParam(workers=8), default = TRUE)
+exprMat  <-  as.matrix(merged@assays$RNA@data)
+colnames(cellInfo)=c('CellType', 'nGene' ,'nUMI')
+scenicOptions <- initializeScenic(org="hgnc", dbDir="cisTarget_databases", nCores=8)
+scenicOptions@inputDatasetInfo$cellInfo <- "int/cellInfo.Rds"
+saveRDS(scenicOptions, file="int/scenicOptions.Rds")
+### Co-expression network
+genesKept <- geneFiltering(exprMat, scenicOptions,minCountsPerGene=3*.0025*ncol(exprMat), minSamples=ncol(exprMat)*.0025)
+exprMat_filtered <- exprMat[genesKept, ]
+exprMat_filtered[1:4,1:4]
+runCorrelation(exprMat_filtered, scenicOptions)
+exprMat_filtered_log <- log2(exprMat_filtered+1) 
+runGenie3(exprMat_filtered_log, scenicOptions,nParts = 4)
+exprMat_log <- log2(exprMat+1)
+scenicOptions@settings$dbs <- scenicOptions@settings$dbs["10kb"] # Toy run settings
+scenicOptions <- runSCENIC_1_coexNetwork2modules(scenicOptions)
+scenicOptions <- runSCENIC_2_createRegulons(scenicOptions, coexMethod=c("w001", "w005", "top50", "top5perTarget", "top10perTarget", "top50perTarget")) 
+ # Toy run settings
+scenicOptions <- initializeScenic(org="hgnc", dbDir="cisTarget_databases", nCores=8)
+scenicOptions <- runSCENIC_3_scoreCells(scenicOptions, exprMat_log)
+scenicOptions <- runSCENIC_4_aucell_binarize(scenicOptions)
+tsneAUC(scenicOptions, aucType="AUC") 
+export2loom(scenicOptions, exprMat)
+saveRDS(scenicOptions, file="int/scenicOptions.Rds")
+
+
+
+
+

@@ -1,0 +1,21 @@
+data<-AverageExpression(merged,assays = 'RNA')
+data<-data[["RNA"]]
+library(Mfuzz)
+eset <- new("ExpressionSet",exprs = data)
+eset <- filter.std(eset,min.std=0)
+eset  <- filter.NA(eset , thres = 0.25)
+eset  <- fill.NA(eset , mode = 'mean')
+eset <- standardise(eset)
+set.seed(123)
+c <- 7
+m <- mestimate(eset) 
+cl <- mfuzz(eset, c = c, m = m)
+library(RColorBrewer)
+color.2 <- colorRampPalette(rev(c("#D73027", "#FAD1AC", "#ABD9E9")))(1000)
+mfuzz.plot(eset,cl,mfrow=c(3,3),
+           new.window= FALSE,
+           time.labels= colnames(eset) ,
+           colo = color.2)
+gene_cluster <- cl$cluster
+gene_cluster <- cbind(data[names(gene_cluster), ], gene_cluster)
+write.csv(gene_cluster,file = 'mfuzz.csv')

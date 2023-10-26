@@ -1,0 +1,81 @@
+## repeatmasker
+conda activate repeatmasker
+export PATH=/public/home/b20213040320/hqx/re_genome/sheep/repeatmasker/RepeatMasker:$PATH
+cd /public/home/b20213040320/hqx/re_genome/sheep/rm
+RepeatMasker -e ncbi -species Ovis aries -pa 40 -gff  /public/home/b20213040320/hqx/re_genome/sheep/GCF_016772045.1_ARS-UI_Ramb_v2.0_genomic.fna
+
+##loom
+conda activate scVelo
+rmsk_gtf=/public/home/genome/sheep/GCF_016772045.1_ARS-UI_Ramb_v2.0_genomic.fna.out.gff 
+cellranger_outDir=/public/home//wwt/cellranger/lab
+cellranger_gtf=/public/home/genome/sheep/re_sheep/genes/genes.gtf
+ls -lh $rmsk_gtf  $cellranger_outDir $cellranger_gtf
+nohup velocyto run10x -m $rmsk_gtf  $cellranger_outDir $cellranger_gtf & 
+
+###loom整合python
+import loompy
+files=["pab.loom","ad6b.loom","ad14b.loom","ad21b.loom","sab.loom","lab.loom"] 
+loompy.combine(files, "uterus.loom", key="Accession")
+
+
+##R
+meta.data <- sce@meta.data
+meta.data$cellname <- rownames(meta.data) 
+rownames(meta.data) <- paste0(meta.data$orig.ident,'_', meta.data$cellname)
+rownames(meta.data) <- gsub('-1_1', '', rownames(meta.data))
+rownames(meta.data) <- gsub('-1_2', '', rownames(meta.data))
+rownames(meta.data) <- gsub('-1_3', '', rownames(meta.data))
+sce <- RenameCells(sce, new.names=rownames(meta.data))
+
+#seurat convert to scanpy
+remotes::install_github("mojaveazure/seurat-disk")
+library(SeuratDisk)
+SaveH5Seurat(sce,filename="sce.h5seurat", overwrite = TRUE)
+Convert("sce.h5seurat", dest = "h5ad", overwrite = TRUE)
+
+##python
+import scanpy as sc
+import anndata
+from scipy import io
+from scipy.sparse import coo_matrix, csr_matrix
+import numpy as np
+import os
+import pandas as pd
+import scvelo as scv
+sce=anndata.read_h5ad("sce.h5ad")
+ldat = scv.read('uterus.loom', cache=True)
+barcodes = [bc.replace('x',"") for bc in ldat.obs.index.tolist()]
+barcodes = [bc.replace(':',"_") for bc in barcodes]
+
+ldat.obs.index = barcodes
+ldat.var_names_make_unique()
+adata = scv.utils.merge(sce, ldat)
+scv.pp.moments(adata)
+scv.tl.velocity(adata, mode = "stochastic")
+scv.tl.velocity_graph(adata)
+scv.pl.velocity_embedding_grid(adata, basis='umap',color='celltype',save='RNA.pdf', legend_loc="on data")
+scv.pl.velocity_embedding_stream(adata, basis='umap',color='celltype',save='RNA.pdf', legend_loc="on data")
+
+scv.tl.recover_dynamics(adata)
+scv.tl.velocity(adata, mode='dynamical')
+scv.tl.velocity_graph(adata)
+#scv.pl.velocity_embedding_grid(adata, basis='umap',color='celltype')
+#scv.pl.velocity_embedding_stream(adata, basis='umap',color='celltype')
+df = adata.var
+df = df[(df['fit_likelihood'] > .1) & df['velocity_genes'] == True]
+scv.tl.latent_time(adata, root_key="CEC_VWF_High")
+scv.pl.scatter(adata, color='latent_time', color_map='gnuplot', size=80)
+top_genes = adata.var['fit_likelihood'].sort_values(ascending=False).index[:300]
+import numpy as np
+data=top_genes     
+filename = 'data.csv'
+np.savetxt(filename, data, fmt='%s', delimiter=',')
+scv.pl.heatmap(adata, var_names=top_genes, sortby='latent_time', col_color='celltype', n_convolve=100，save='map.pdf')
+top_genes = adata.var['fit_likelihood'].sort_values(ascending=False).index
+scv.pl.scatter(adata, basis=top_genes[:15], ncols=5, frameon=False) 
+scv.tl.rank_dynamical_genes(adata, groupby='celltype')
+df = scv.get_df(adata, 'rank_dynamical_genes/names')
+scv.tl.rank_velocity_genes(adata, groupby='celltype', min_corr=.3) 
+df = scv.DataFrame(adata.uns['rank_velocity_genes']['names'])
+scv.tl.velocity_pseudotime(adata,root_key='CEC_C1QTNF9_High')      
+scv.pl.scatter(adata, color='velocity_pseudotime', cmap='gnuplot')

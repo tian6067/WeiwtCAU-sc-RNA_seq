@@ -1,0 +1,144 @@
+library(Seurat)
+
+# sctransform
+library(sctransform)
+
+# plotting and data science packages
+library(tidyverse)
+library(cowplot)
+library(patchwork)
+
+# co-expression network analysis packages:
+library(WGCNA)
+library(hdWGCNA)
+
+# network analysis & visualization package:
+library(igraph)
+
+library(enrichR)
+library(GeneOverlap)
+
+seurat_obj <- readRDS('Microglia.rds')
+
+seurat_subset <- SetupForWGCNA(seurat_obj,features = VariableFeatures(seurat_obj),wgcna_name = "SCT")
+
+seurat_subset <- MetacellsByGroups(seurat_obj = seurat_subset,group.by = c("orig.ident"),k = 25,max_shared=12,min_cells = 50,ident.group = 'orig.ident',slot = 'scale.data',assay = 'SCT')
+
+seurat_subset <- SetDatExpr(seurat_subset)
+
+# test different soft power thresholds
+seurat_subset <- TestSoftPowers(seurat_subset)
+plot_list <- PlotSoftPowers(seurat_subset)
+pdf("plot_list.pdf",width=15,height=15)
+print(wrap_plots(plot_list, ncol=2))
+dev.off()
+power_table <- GetPowerTable(seurat_obj)
+write.csv(power_table,file='power_table.csv')
+seurat_subset <- ConstructNetwork(
+  seurat_subset,
+  soft_power = 12,
+  tom_name = "SCT_cells",
+  overwrite_tom = TRUE
+)
+
+# compute module eigengenes and connectivity
+seurat_subset <- ModuleEigengenes(seurat_subset)
+seurat_subset <- ModuleConnectivity(seurat_subset)
+pdf("hdWGCNA SCT Dendrogram.pdf",width=15,height=15)
+PlotDendrogram(seurat_subset, main='hdWGCNA SCT Dendrogram')
+dev.off()
+pdf("PlotKMEs.pdf",width=15,height=15)
+PlotKMEs(seurat_subset, ncol=5)
+dev.off()
+plot_list <- ModuleFeaturePlot(
+  seurat_subset,
+  features='hMEs', # plot the hMEs
+  order=TRUE # order so the points with highest hMEs are on top
+)
+pdf("Pplot_list.pdf",width=15,height=15)
+wrap_plots(plot_list, ncol=6)
+dev.off()
+pdf("cor.pdf",width=15,height=15)
+ModuleCorrelogram(seurat_subset)
+dev.off()
+pdf("dotplot.pdf",width=15,height=15)
+# get hMEs from seurat object
+MEs <- GetMEs(seurat_subset, harmonized=TRUE)
+mods <- colnames(MEs); mods <- mods[mods != 'grey']
+dev.off()
+# add hMEs to Seurat meta-data:
+seurat_subset@meta.data <- cbind(seurat_subset@meta.data, MEs)
+DotPlot(seurat_subset, features=mods, group.by = 'celltype')+coord_flip() +RotatedAxis() +scale_color_gradient2(high='red', mid='grey95', low='blue')
+dev.off()
+ModuleNetworkPlot(seurat_subset)
+pdf("HubGeneNetworkPlot.pdf",width=15,height=15)
+HubGeneNetworkPlot(
+  seurat_subset,
+  n_hubs = 3, n_other=5,
+  edge_prop = 0.75,
+  mods = 'all'
+)
+dev.off()
+seurat_subset <- RunModuleUMAP(
+  seurat_subset,
+  n_hubs = 10, # number of hub genes to include for the UMAP embedding
+  n_neighbors=15, # neighbors parameter for UMAP
+  min_dist=0.1 # min distance between points in UMAP space
+)
+umap_df <- GetModuleUMAP(seurat_subset)
+pdf("umap.pdf",width=15,height=15)
+ggplot(umap_df, aes(x=UMAP1, y=UMAP2)) +
+  geom_point(
+   color=umap_df$color, # color each point by WGCNA module
+   size=umap_df$kME*2 # size of each point based on intramodular connectivity
+  ) +
+  umap_theme()
+dev.off()
+pdf("umap_dot.pdf",width=15,height=15)
+ModuleUMAPPlot(
+  seurat_subset,
+  edge.alpha=0.25,
+  sample_edges=TRUE,
+  edge_prop=0.1, # proportion of edges to sample (20% here)
+  label_hubs=2 ,# how many hub genes to plot per module?
+  keep_grey_edges=FALSE
+)
+dev.off()
+dbs <- c('GO_Biological_Process_2021','GO_Cellular_Component_2021','GO_Molecular_Function_2021')
+# perform enrichment tests
+seurat_subset <- RunEnrichr(
+  seurat_subset,
+  dbs=dbs, # character vector of enrichr databases to test
+  max_genes = 100 # number of genes per module to test
+)
+# retrieve the output table
+enrich_df <- GetEnrichrTable(seurat_subset)
+pdf("go.pdf",width=15,height=15)
+EnrichrDotPlot(
+  seurat_subset,
+  mods = "all", # use all modules (this is the default behavior)
+  database = "GO_Biological_Process_2021", # this has to be one of the lists we used above!!!
+  n_terms=20 # number of terms for each module
+)
+dev.off()
+markers <- Seurat::FindAllMarkers(
+  seurat_subset,
+  only.pos = TRUE,
+  logfc.threshold=1
+)
+# compute marker gene overlaps
+overlap_df <- OverlapModulesDEGs(
+  seurat_subset,
+  deg_df = markers,
+  fc_cutoff = 1 # log fold change cutoff for overlap analysis
+)
+plot_list <- OverlapBarPlot(overlap_df)
+pdf("marker.pdf",width=15,height=15)
+wrap_plots(plot_list, ncol=3)
+dev.off()
+pdf("OverlapDotPlot.pdf",width=15,height=15)
+OverlapDotPlot(
+  overlap_df,
+  plot_var = 'odds_ratio') +
+  ggtitle('Overlap of modules & cell-type markers')
+dev.off()

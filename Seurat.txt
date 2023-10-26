@@ -1,0 +1,93 @@
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(clustree)
+library(BiocParallel)
+register(BPPARAM = MulticoreParam(workers = 6))
+sheep.data <- Read10X(data.dir = "filtered_feature_bc_matrix")
+sheep <- CreateSeuratObject(counts = sheep.data, project = "sheep", min.cells = 3, min.featurerumens = 200)
+##mt (KEF53 is the name of mt gene of sheep)
+sheep[["percent.mt"]] <- PercentageFeatureSet(sheep, pattern = "KEF53-") 
+sheep[["ND6"]] <- PercentageFeatureSet(sheep, pattern  = "ND6")
+sheep[["ND5"]] <- PercentageFeatureSet(sheep, pattern  = "ND5")
+sheep[["ND4L"]] <- PercentageFeatureSet(sheep, pattern  = "ND4L")
+sheep[["ND4"]] <- PercentageFeatureSet(sheep, pattern  = "ND4")
+sheep[["ND3"]] <- PercentageFeatureSet(sheep, pattern  = "ND3")
+sheep[["ND2"]] <- PercentageFeatureSet(sheep, pattern  = "ND2")
+sheep[["ND1"]] <- PercentageFeatureSet(sheep, pattern  = "ND1")
+sheep[["CYTB"]] <- PercentageFeatureSet(sheep, pattern  = "CYTB")
+sheep[["COX3"]] <- PercentageFeatureSet(sheep, pattern  = "COX3")
+sheep[["COX2"]] <- PercentageFeatureSet(sheep, pattern  = "COX2")
+sheep[["COX1"]] <- PercentageFeatureSet(sheep, pattern  = "COX1")
+sheep[["ATP8"]] <- PercentageFeatureSet(sheep, pattern  = "ATP8")
+sheep[["ATP6"]] <- PercentageFeatureSet(sheep, pattern  = "ATP6")
+sheep[["percent.mt"]] <- apply(sheep@meta.data[,4:16], 1, sum)
+VlnPlot(sheep, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+plot1 <- FeatureScatter(sheep, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(sheep, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+sheep <- subset(sheep, subset = nFeature_RNA > 200 & nFeature_RNA < 9000 & nCount_RNA< 1e+05 &percent.mt < 30) 
+sheep  <- NormalizeData(sheep, normalization.method = "LogNormalize", scale.factor = 10000) %>% FindVariableFeatures(selection.method = "vst", nfeatures = 2000) %>% ScaleData() %>% RunPCA(verbose=FALSE)
+all.genes <- rownames(sheep)
+ElbowPlot(sheep,ndims = 50)
+sheep <- FindNeighbors(sheep, dims = 1:30)
+sheep <- FindNeighbors(sheep, dims = 1:40)
+for (res in c(0.01, 0.05, 0.1, 0.2, 0.3, 0.5,0.8,1,1.2,1.4)) {
+  sheep <- FindClusters(sheep, graph.name = "RNA_snn", resolution = res, algorithm = 1)
+}
+for (res in c(0.01, 0.05, 0.1, 0.2, 0.3, 0.4,0.5,0.6,0.7,0.8,0.9,1,1.2,1.4)) {
+     T <- FindClusters(T, graph.name = "integrated_snn", resolution = res, algorithm = 1)
+ }
+clustree(sheep@meta.data, prefix = "RNA_snn_res.")
+sheep <- RunTSNE(sheep, dims = 1:40)
+sheep <- RunUMAP(sheep, dims = 1:40)
+DimPlot(sheep,reduction = "umap",label = TRUE,pt.size = 0.5)
+saveRDS(sheep, file = "sheep.rds")
+library(DoubletFinder)
+sweep.res.list_sheep <- paramSweep_v3(sheep, PCs = 1:10, sct = FALSE)
+sweep.stats_sheep <- summarizeSweep(sweep.res.list_sheep, GT = FALSE)
+bcmvn_sheep <- find.pK(sweep.stats_sheep)
+opt_pK <- as.numeric(as.vector(bcmvn_sheep$pK[which.max(bcmvn_sheep$BCmetric)]))
+print(opt_pK)
+annotations <- sheep@meta.data$seurat_clusters
+homotypic.prop <- modelHomotypic(annotations)           
+nExp_poi <- round(0.06*nrow(sheep@meta.data))  
+nExp_poi.adj <- round(nExp_poi*(1-homotypic.prop))
+sheep <- doubletFinder_v3(sheep,PCs = 1:10,pN = 0.25,pK = opt_pK,nExp = nExp_poi,reuse.pANN = FALSE,sct = FALSE)
+DimPlot(sheep, reduction = "tsne", group.by = "DF.classifications_0.25_0.05_158",order = T)
+table(sheep$DF.classifications_0.25_0.05_158) 
+sheep <- subset(sheep,DF.classifications_0.25_0.22_268=='Singlet')
+DimPlot(sheep,reduction = "tsne",label = TRUE,pt.size = 0.5)
+
+##CCA 
+merged <- merged(plain_Hu_sheep,y=c( "1wk","2wk","3wk","8mon","Tibetan sheep"))
+merged <- SplitObject(merged, split.by = "orig.ident")
+merged <- merged[c("plain_Hu_sheep", "1wk","2wk","3wk","8mon","Tibetan sheep")]
+for (i in 1:length(merged)) {
+  merged[[i]] <- NormalizeData(merged[[i]], verbose = TRUE)
+  merged[[i]] <- SCTransform(merged[[i]],vst.flavor = "v2", vars.to.regress = c("percent.mt"))
+}
+integ_features <- SelectIntegrationFeatures(object.list = merged, nfeatures = 2000) 
+merged <- PrepSCTIntegration(object.list = merged, anchor.features = integ_features)
+merged <- FindIntegrationAnchors(object.list = merged, normalization.method = "SCT", anchor.features = integ_features)
+merged <- IntegrateData(anchorset = merged, normalization.method = "SCT")
+merged <- RunPCA(object = merged)
+PCAPlot(merged,split.by = "orig.ident")
+merged <- RunTSNE(merged, dims = 1:30,reduction = "pca")
+merged <- RunUMAP(merged, dims = 1:30,reduction = "pca")
+
+##marker gene
+markers <- FindAllMarkers(merged, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+markers<- markers %>% filter(!grepl('LOC',rownames(markers)))
+top10 <- markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+top20 <- markers %>% group_by(cluster) %>% top_n(n = 20, wt = avg_log2FC)
+DoHeatmap(sheep, features = top10$gene)
+
+##cellratio
+Cellratio <- prop.table(table(Idents(merged), merged$samples), margin = 2)
+Cellratio <- as.data.frame(Cellratio)
+ggplot(Cellratio) + 
+    geom_bar(aes(x =Var2, y= Freq, fill = Var1),stat = "identity",width = 0.8,size = 0.5)+ 
+    theme_classic() +
+    labs(x='Sample',y = 'Ratio')+
+    theme(panel.border = element_rect(fill=NA, size=0.5, linetype="solid"))
